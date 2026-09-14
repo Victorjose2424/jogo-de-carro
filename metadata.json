@@ -1,0 +1,6 @@
+{
+  "name": "Beach Kart Racing",
+  "description": "Jogo de corrida de karts 3D arcade com 3 pistas (Praia, Vulcão e Neve), 4 tipos de kart com atributos únicos, 3 modos de corrida (Normal, Time Trial e Eliminatória), itens, boost e drifts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
