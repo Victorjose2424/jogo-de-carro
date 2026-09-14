@@ -273,8 +273,8 @@ export const HUD: React.FC<HUDProps> = ({
         </div>
       )}
 
-      {/* --- RIGHT EDGE: BOOST ENERGY BAR --- */}
-      <div className="absolute right-4 bottom-32 sm:bottom-40 flex flex-col items-center gap-1.5">
+      {/* --- BOOST ENERGY BAR --- */}
+      <div className="absolute right-4 bottom-48 sm:bottom-56 md:bottom-40 flex flex-col items-center gap-1.5 z-20">
         <div className="flex items-center gap-1 text-amber-400 font-black text-xs sm:text-sm tracking-wider uppercase drop-shadow">
           <Flame className="w-4 h-4 fill-amber-400 animate-pulse text-amber-400" />
           <span>BOOST</span>
@@ -283,7 +283,7 @@ export const HUD: React.FC<HUDProps> = ({
         {/* Vertical Boost Bar */}
         <div
           id="hud-boost-bar-container"
-          className="relative w-7 sm:w-8 h-36 sm:h-44 bg-slate-950/80 rounded-2xl border-2 border-amber-400/60 p-1 backdrop-blur-md shadow-2xl flex flex-col justify-end overflow-hidden"
+          className="relative w-7 sm:w-8 h-32 sm:h-44 bg-slate-950/80 rounded-2xl border-2 border-amber-400/60 p-1 backdrop-blur-md shadow-2xl flex flex-col justify-end overflow-hidden"
         >
           <div
             id="hud-boost-fill"
@@ -305,8 +305,8 @@ export const HUD: React.FC<HUDProps> = ({
         </span>
       </div>
 
-      {/* --- BOTTOM-LEFT: ITEM SLOTS (Q, E, R) --- */}
-      <div className="absolute bottom-4 left-4 flex flex-col gap-2 pointer-events-auto">
+      {/* --- ITEM SLOTS (Q, E, R) - Placed safely above steer buttons on touch --- */}
+      <div className="absolute bottom-28 sm:bottom-32 md:bottom-4 left-4 flex flex-col gap-2 pointer-events-auto z-20">
         <div className="flex items-center gap-2">
           <ItemSlotCard
             slotKey="Q"
@@ -336,11 +336,11 @@ export const HUD: React.FC<HUDProps> = ({
         )}
       </div>
 
-      {/* --- BOTTOM-RIGHT: CIRCULAR SPEEDOMETER --- */}
-      <div className="absolute bottom-4 right-4 flex items-center pointer-events-auto">
+      {/* --- CIRCULAR SPEEDOMETER - Placed safely above driving controls on touch --- */}
+      <div className="absolute bottom-48 sm:bottom-56 md:bottom-4 right-4 flex items-center pointer-events-auto z-20 scale-90 sm:scale-100 origin-bottom-right">
         <div
           id="hud-speedometer"
-          className="relative w-32 h-32 sm:w-40 sm:h-40 rounded-full bg-slate-950/85 border-2 border-cyan-400/40 shadow-2xl backdrop-blur-md flex items-center justify-center"
+          className="relative w-28 h-28 sm:w-40 sm:h-40 rounded-full bg-slate-950/85 border-2 border-cyan-400/40 shadow-2xl backdrop-blur-md flex items-center justify-center"
         >
           <svg className="absolute inset-0 w-full h-full -rotate-90 transform" viewBox="0 0 120 120">
             <circle

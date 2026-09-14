@@ -14,10 +14,10 @@ import {
 } from './types';
 import { CHARACTERS } from './game/characters';
 import { KART_TYPES } from './game/karts';
-import { TRACK_BUNDLES, TRACK_DEFINITIONS } from './game/trackData';
+import { TRACK_BUNDLES, TRACK_DEFINITIONS, WAYPOINTS_COUNT } from './game/trackData';
 import { initThreeScene, SceneBundle } from './game/threeScene';
 import { createKartModel, KartMeshBundle } from './game/models';
-import { updateKartPhysics, resolveKartCollisions, KartInput } from './game/physics';
+import { updateKartPhysics, resolveKartCollisions, getExactGroundElevation, KartInput } from './game/physics';
 import { updateAIRacer } from './game/aiController';
 import { checkItemBoxPickups, activateItem, updateProjectilesAndTraps } from './game/itemSystem';
 import { soundEngine } from './audio/soundEngine';
@@ -76,6 +76,9 @@ export default function App() {
   });
   const cameraTargetRef = useRef<THREE.Vector3>(new THREE.Vector3());
   const cameraPosRef = useRef<THREE.Vector3>(new THREE.Vector3());
+  const camYawRef = useRef<number>(0);
+  const camInitializedRef = useRef<boolean>(false);
+  const hudThrottleRef = useRef<number>(0);
   const lastTimeRef = useRef<number>(performance.now());
   const animationFrameIdRef = useRef<number | null>(null);
   const gameStateRef = useRef<GameState>(gameState);
@@ -256,6 +259,8 @@ export default function App() {
             }
 
             meshBundle.root.visible = true;
+
+            // Ground elevation is strictly synced from physics
             meshBundle.root.position.set(r.x, r.y, r.z);
             meshBundle.root.rotation.y = r.rotationY;
 
@@ -263,15 +268,25 @@ export default function App() {
             const tilt = (r.steerAngle * 0.4) + (r.driftDirection * 0.15);
             meshBundle.root.rotation.z = -tilt;
 
-            // Front wheels steering turn
+            // Front wheels steering turn on Y axis (left/right with A/D or arrows)
             meshBundle.frontLeftWheel.rotation.y = r.steerAngle;
             meshBundle.frontRightWheel.rotation.y = r.steerAngle;
+            if (meshBundle.steeringWheel) {
+              meshBundle.steeringWheel.rotation.z = -r.steerAngle * 1.5;
+            }
 
-            // Spin all 4 wheels based on speed
-            const wheelSpinSpeed = (r.speed * 0.278) / 0.36; // rad/s
-            meshBundle.wheels.forEach(tire => {
-              tire.rotation.x += wheelSpinSpeed * dt;
-            });
+            // Realistic wheel rolling on X axis based on velocity
+            const wheelRadius = 0.36;
+            const wheelSpinSpeed = (r.speed * 0.278) / wheelRadius; // rad/s forward
+            if (meshBundle.wheelRollHubs && meshBundle.wheelRollHubs.length > 0) {
+              meshBundle.wheelRollHubs.forEach(hub => {
+                hub.rotation.x += wheelSpinSpeed * dt;
+              });
+            } else {
+              meshBundle.wheels.forEach(tire => {
+                tire.rotation.x += wheelSpinSpeed * dt;
+              });
+            }
 
             // Driver head looks into corner
             meshBundle.driverHead.rotation.y = r.steerAngle * 0.8;
@@ -294,36 +309,70 @@ export default function App() {
           }
         });
 
-        // 10. Smooth 3rd-Person Chase Camera
+        // 10. Jitter-Free Third-Person Chase Camera with Yaw Tracking & Exponential Damping
         if (player && !player.isEliminated) {
-          const camDistance = 8.5 + (player.speed / 160) * 2.0;
-          const camHeight = 3.6 + (player.speed / 160) * 0.6;
+          if (!camInitializedRef.current) {
+            camYawRef.current = player.rotationY;
+            const initCamDist = 8.5;
+            const initCamHeight = 3.6;
+            cameraPosRef.current.set(
+              player.x - Math.sin(player.rotationY) * initCamDist,
+              player.y + initCamHeight,
+              player.z - Math.cos(player.rotationY) * initCamDist
+            );
+            cameraTargetRef.current.set(player.x, player.y + 1.2, player.z);
+            bundle.camera.position.copy(cameraPosRef.current);
+            bundle.camera.lookAt(cameraTargetRef.current);
+            camInitializedRef.current = true;
+          }
 
-          const behindX = player.x - Math.sin(player.rotationY) * camDistance;
-          const behindZ = player.z - Math.cos(player.rotationY) * camDistance;
-          const behindY = player.y + camHeight;
+          // Smooth yaw rotation follows player heading without sudden twitching
+          let yawDiff = player.rotationY - camYawRef.current;
+          while (yawDiff > Math.PI) yawDiff -= Math.PI * 2;
+          while (yawDiff < -Math.PI) yawDiff += Math.PI * 2;
+          const yawFollowSpeed = Math.min(10, 5.0 + (Math.abs(player.speed) / 100) * 4.0);
+          camYawRef.current += yawDiff * (1 - Math.exp(-yawFollowSpeed * dt));
 
-          cameraPosRef.current.lerp(new THREE.Vector3(behindX, behindY, behindZ), 0.14);
+          const camDistance = 8.5 + (Math.max(0, player.speed) / 160) * 2.0;
+          const camHeight = 3.5 + (Math.max(0, player.speed) / 160) * 0.6;
+
+          const targetCamX = player.x - Math.sin(camYawRef.current) * camDistance;
+          const targetCamZ = player.z - Math.cos(camYawRef.current) * camDistance;
+          const targetCamY = player.y + camHeight;
+
+          // Frame-rate independent exponential damping for camera position (completely stable, zero jitter!)
+          const posDecay = 1 - Math.exp(-12.0 * dt);
+          cameraPosRef.current.x += (targetCamX - cameraPosRef.current.x) * posDecay;
+          cameraPosRef.current.y += (targetCamY - cameraPosRef.current.y) * posDecay;
+          cameraPosRef.current.z += (targetCamZ - cameraPosRef.current.z) * posDecay;
           bundle.camera.position.copy(cameraPosRef.current);
 
-          const lookAheadDistance = 6.0;
-          const targetLook = new THREE.Vector3(
-            player.x + Math.sin(player.rotationY) * lookAheadDistance,
-            player.y + 1.2,
-            player.z + Math.cos(player.rotationY) * lookAheadDistance
-          );
-          cameraTargetRef.current.lerp(targetLook, 0.2);
+          // Look target ahead of player
+          const lookAheadDist = 3.0;
+          const targetLookX = player.x + Math.sin(camYawRef.current) * lookAheadDist;
+          const targetLookZ = player.z + Math.cos(camYawRef.current) * lookAheadDist;
+          const targetLookY = player.y + 1.2;
+
+          const lookDecay = 1 - Math.exp(-14.0 * dt);
+          cameraTargetRef.current.x += (targetLookX - cameraTargetRef.current.x) * lookDecay;
+          cameraTargetRef.current.y += (targetLookY - cameraTargetRef.current.y) * lookDecay;
+          cameraTargetRef.current.z += (targetLookZ - cameraTargetRef.current.z) * lookDecay;
           bundle.camera.lookAt(cameraTargetRef.current);
 
           // Dynamic Camera FOV punch on boost
           const isBoosting = player.boostTimeRemaining > 0 || (inputRef.current.boost && player.boostFuel > 5);
-          const targetFov = isBoosting ? 78 : 65;
-          bundle.camera.fov = THREE.MathUtils.lerp(bundle.camera.fov, targetFov, 0.1);
+          const targetFov = isBoosting ? 76 : 65;
+          const fovDecay = 1 - Math.exp(-8.0 * dt);
+          bundle.camera.fov += (targetFov - bundle.camera.fov) * fovDecay;
           bundle.camera.updateProjectionMatrix();
 
-          // Sync HUD state
-          setHudPlayerState({ ...player });
-          setHudAllRacers([...racers]);
+          // Throttle React state updates to 20 FPS (every 50ms) to eliminate browser rendering stutter
+          hudThrottleRef.current += dt;
+          if (hudThrottleRef.current >= 0.05) {
+            hudThrottleRef.current = 0;
+            setHudPlayerState({ ...player });
+            setHudAllRacers([...racers]);
+          }
         }
       } else if (state === 'MENU' || state === 'CHARACTER_SELECT') {
         // Slow cinematic orbit showcase camera around track
@@ -405,16 +454,20 @@ export default function App() {
       const row = Math.floor(gridIdx / 2);
       const col = gridIdx % 2;
 
-      const lateralOffset = (col === 0 ? -3.5 : 3.5);
-      const longitudinalOffset = -(row * 5.0 + 3.0);
+      const lateralOffset = (col === 0 ? -1.8 : 1.8);
+      // Position along the track waypoints backwards from start line
+      const rowWpOffset = row * 3 + 2;
+      const wpIdx = (WAYPOINTS_COUNT - rowWpOffset + WAYPOINTS_COUNT) % WAYPOINTS_COUNT;
+      const rowWp = waypoints[wpIdx];
 
-      const gx = startWp.x + startWp.normalX * lateralOffset + Math.sin(trackHeading) * longitudinalOffset;
-      const gz = startWp.z + startWp.normalZ * lateralOffset + Math.cos(trackHeading) * longitudinalOffset;
-      const gy = startWp.y + 0.4;
+      const gx = rowWp.x + rowWp.normalX * lateralOffset;
+      const gz = rowWp.z + rowWp.normalZ * lateralOffset;
+      const gy = getExactGroundElevation(gx, gz, trackBundle);
+      const heading = Math.atan2(rowWp.tangentX, rowWp.tangentZ);
 
       const meshBundle = createKartModel(item.char, item.kart);
       meshBundle.root.position.set(gx, gy, gz);
-      meshBundle.root.rotation.y = trackHeading;
+      meshBundle.root.rotation.y = heading;
       bundle.scene.add(meshBundle.root);
 
       const racerId = item.isPlayer ? 'player' : `ai_${item.char.id}`;
@@ -432,7 +485,7 @@ export default function App() {
         vx: 0,
         vy: 0,
         vz: 0,
-        rotationY: trackHeading,
+        rotationY: heading,
         steerAngle: 0,
         speed: 0,
         driftDirection: 0,
@@ -443,14 +496,14 @@ export default function App() {
         spinOutTimeRemaining: 0,
         boostFuel: 100,
         currentLap: 1,
-        lapProgress: 0,
+        lapProgress: wpIdx / WAYPOINTS_COUNT,
         totalDistance: 0,
         rank: gridIdx + 1,
         items: [null, null, null],
         isGrounded: true,
         lapTimes: [],
         currentLapStartTime: performance.now(),
-        lastKnownWpIndex: 0,
+        lastKnownWpIndex: wpIdx,
         isEliminated: false,
       });
     });
@@ -460,13 +513,16 @@ export default function App() {
     // Reset camera right behind player
     const player = newRacers.find(r => r.isPlayer);
     if (player) {
+      camYawRef.current = player.rotationY;
+      camInitializedRef.current = true;
       cameraPosRef.current.set(
-        player.x - Math.sin(player.rotationY) * 9,
-        player.y + 3.8,
-        player.z - Math.cos(player.rotationY) * 9
+        player.x - Math.sin(player.rotationY) * 8.5,
+        player.y + 3.6,
+        player.z - Math.cos(player.rotationY) * 8.5
       );
       bundle.camera.position.copy(cameraPosRef.current);
-      bundle.camera.lookAt(player.x, player.y + 1, player.z);
+      cameraTargetRef.current.set(player.x, player.y + 1.2, player.z);
+      bundle.camera.lookAt(cameraTargetRef.current);
     }
   }, []);
 

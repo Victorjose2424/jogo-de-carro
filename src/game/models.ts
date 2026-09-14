@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { CharacterDef, KartTypeDef } from '../types';
+import { getGantryBannerTexture, getChevronBoardTexture } from './environmentTextures';
 
 export interface KartMeshBundle {
   root: THREE.Group;
@@ -15,6 +16,7 @@ export interface KartMeshBundle {
   flameRight: THREE.Mesh;
   shieldMesh: THREE.Mesh;
   wheels: THREE.Mesh[];
+  wheelRollHubs: THREE.Group[];
   neonGlow?: THREE.Mesh;
 }
 
@@ -372,50 +374,69 @@ export function createKartModel(character: CharacterDef, kartType?: KartTypeDef)
   driverGroup.add(headGroup);
   root.add(driverGroup);
 
-  // --- 4 WHEELS WITH DETAILED RIMS ---
+  // --- 4 WHEELS WITH REALISTIC ROTATING HUBS & DETAILED RIMS ---
   const wheels: THREE.Mesh[] = [];
+  const wheelRollHubs: THREE.Group[] = [];
 
-  function createWheel(isFront: boolean): { wheelRoot: THREE.Group; tireMesh: THREE.Mesh } {
+  function createWheel(isFront: boolean, isLeft: boolean): { wheelRoot: THREE.Group; rollHub: THREE.Group } {
     const wheelRoot = new THREE.Group();
+    const rollHub = new THREE.Group();
+    rollHub.name = `wheel_roll_${isFront ? 'front' : 'rear'}_${isLeft ? 'left' : 'right'}`;
+    wheelRoot.add(rollHub);
+    wheelRollHubs.push(rollHub);
+
     const isOffroad = typeId === 'offroad';
     const isFormula = typeId === 'formula';
 
     const radius = isOffroad ? (isFront ? 0.38 : 0.44) : isFront ? 0.34 : 0.38;
     const thickness = isOffroad ? 0.38 : isFormula ? 0.26 : isFront ? 0.28 : 0.36;
 
-    const tGeo = new THREE.CylinderGeometry(radius, radius, thickness, 16);
+    // Tire mesh with geometry rotated along X axis (so rotation around X rolls forward)
+    const tGeo = new THREE.CylinderGeometry(radius, radius, thickness, 20);
+    tGeo.rotateZ(Math.PI / 2);
     const tire = new THREE.Mesh(tGeo, tireMat);
-    tire.rotation.z = Math.PI / 2;
     tire.castShadow = true;
-    wheelRoot.add(tire);
+    rollHub.add(tire);
     wheels.push(tire);
 
-    const rimGeo = new THREE.CylinderGeometry(radius * 0.6, radius * 0.6, thickness * 1.05, 12);
+    // Rim cylinder geometry rotated along X axis
+    const rimGeo = new THREE.CylinderGeometry(radius * 0.62, radius * 0.62, thickness * 1.05, 14);
+    rimGeo.rotateZ(Math.PI / 2);
     const rim = new THREE.Mesh(rimGeo, accentMat);
-    rim.rotation.z = Math.PI / 2;
-    wheelRoot.add(rim);
+    rollHub.add(rim);
 
+    // Visible rim spokes so wheel spinning in X axis is clearly visible
+    const numSpokes = 5;
+    for (let s = 0; s < numSpokes; s++) {
+      const angle = (s / numSpokes) * Math.PI * 2;
+      const spokeGeo = new THREE.BoxGeometry(thickness * 1.08, radius * 0.52, 0.05);
+      const spoke = new THREE.Mesh(spokeGeo, chromeMat);
+      spoke.rotation.x = angle;
+      rollHub.add(spoke);
+    }
+
+    // Outer wheel center cap
     const capGeo = new THREE.SphereGeometry(radius * 0.25, 8, 8);
     const cap = new THREE.Mesh(capGeo, chromeMat);
-    cap.position.x = isFront ? 0.15 : 0.19;
-    wheelRoot.add(cap);
+    cap.position.x = isLeft ? (-thickness / 2 - 0.02) : (thickness / 2 + 0.02);
+    rollHub.add(cap);
 
-    return { wheelRoot, tireMesh: tire };
+    return { wheelRoot, rollHub };
   }
 
-  const fl = createWheel(true);
+  const fl = createWheel(true, true);
   fl.wheelRoot.position.set(-0.85, 0.34, 0.95);
   root.add(fl.wheelRoot);
 
-  const fr = createWheel(true);
+  const fr = createWheel(true, false);
   fr.wheelRoot.position.set(0.85, 0.34, 0.95);
   root.add(fr.wheelRoot);
 
-  const rl = createWheel(false);
+  const rl = createWheel(false, true);
   rl.wheelRoot.position.set(-0.9, 0.38, -0.85);
   root.add(rl.wheelRoot);
 
-  const rr = createWheel(false);
+  const rr = createWheel(false, false);
   rr.wheelRoot.position.set(0.9, 0.38, -0.85);
   root.add(rr.wheelRoot);
 
@@ -449,6 +470,7 @@ export function createKartModel(character: CharacterDef, kartType?: KartTypeDef)
     flameRight,
     shieldMesh,
     wheels,
+    wheelRollHubs,
   };
 }
 
@@ -570,77 +592,127 @@ export function createRampModel(width: number, height: number, length: number, t
 }
 
 /**
- * Creates lush 3D Palm Tree with curved trunk and coconuts
+ * Creates ultra-lush 3D Palm Tree with organic curved ringed trunk,
+ * double-tier tropical fronds, coconut cluster, and wind sway pivot
  */
 export function createPalmTree(): THREE.Group {
   const palm = new THREE.Group();
   palm.name = 'palm_tree';
 
-  const trunkMat = getCachedMaterial('palm_trunk', () => new THREE.MeshStandardMaterial({
-    color: 0x854d0e,
+  const trunkMat = getCachedMaterial('palm_trunk_hd', () => new THREE.MeshStandardMaterial({
+    color: 0x78350f,
+    roughness: 0.85,
+    metalness: 0.05,
+  }));
+  const ringMat = getCachedMaterial('palm_ring_hd', () => new THREE.MeshStandardMaterial({
+    color: 0x451a03,
     roughness: 0.9,
   }));
 
-  const trunkSteps = 7;
-  let currentY = 0;
+  // Flared root base
+  const rootGeo = new THREE.CylinderGeometry(0.65, 0.9, 0.6, 9);
+  const rootMesh = new THREE.Mesh(rootGeo, trunkMat);
+  rootMesh.position.y = 0.3;
+  rootMesh.castShadow = true;
+  palm.add(rootMesh);
+
+  // Segmented curved trunk with ringed bark
+  const trunkSteps = 8;
+  let currentY = 0.5;
   const curveDir = Math.random() * Math.PI * 2;
-  const bendIntensity = 0.08 + Math.random() * 0.06;
+  const bendIntensity = 0.07 + Math.random() * 0.05;
 
   for (let i = 0; i < trunkSteps; i++) {
-    const bottomRadius = 0.45 * (1 - i * 0.08);
-    const topRadius = 0.42 * (1 - (i + 1) * 0.08);
-    const segHeight = 1.1;
+    const bottomRadius = 0.52 * (1 - i * 0.065);
+    const topRadius = 0.48 * (1 - (i + 1) * 0.065);
+    const segHeight = 1.15;
 
-    const segGeo = new THREE.CylinderGeometry(topRadius, bottomRadius, segHeight, 8);
+    const segGeo = new THREE.CylinderGeometry(topRadius, bottomRadius, segHeight, 9);
     const seg = new THREE.Mesh(segGeo, trunkMat);
-    seg.position.set(
-      Math.cos(curveDir) * (i * i * bendIntensity),
-      currentY + segHeight / 2,
-      Math.sin(curveDir) * (i * i * bendIntensity)
-    );
-    seg.rotation.z = Math.cos(curveDir) * (i * bendIntensity * 0.7);
-    seg.rotation.x = Math.sin(curveDir) * (i * bendIntensity * 0.7);
+    const offsetX = Math.cos(curveDir) * (i * i * bendIntensity);
+    const offsetZ = Math.sin(curveDir) * (i * i * bendIntensity);
+
+    seg.position.set(offsetX, currentY + segHeight / 2, offsetZ);
+    seg.rotation.z = Math.cos(curveDir) * (i * bendIntensity * 0.85);
+    seg.rotation.x = Math.sin(curveDir) * (i * bendIntensity * 0.85);
     seg.castShadow = true;
     seg.receiveShadow = true;
     palm.add(seg);
 
-    currentY += segHeight * 0.95;
+    // Bark segment ridge ring
+    const ringGeo = new THREE.TorusGeometry(bottomRadius * 1.05, 0.05, 6, 12);
+    const ring = new THREE.Mesh(ringGeo, ringMat);
+    ring.rotation.x = Math.PI / 2;
+    ring.position.set(offsetX, currentY + 0.1, offsetZ);
+    palm.add(ring);
+
+    currentY += segHeight * 0.92;
   }
 
+  // Crown pivot group (wind breeze can animate this!)
   const crownGroup = new THREE.Group();
+  crownGroup.name = 'wind_sway';
   crownGroup.position.set(
     Math.cos(curveDir) * (trunkSteps * trunkSteps * bendIntensity),
     currentY,
     Math.sin(curveDir) * (trunkSteps * trunkSteps * bendIntensity)
   );
 
-  const coconutMat = getCachedMaterial('coconut_mat', () => new THREE.MeshStandardMaterial({
-    color: 0x451a03,
-    roughness: 0.8,
+  // Coconut cluster (5 coconuts nestled under the crown)
+  const coconutMat = getCachedMaterial('coconut_mat_hd', () => new THREE.MeshStandardMaterial({
+    color: 0x3b1d07,
+    roughness: 0.75,
   }));
-  const nutGeo = new THREE.SphereGeometry(0.24, 7, 7);
-  for (let c = 0; c < 4; c++) {
-    const angle = (c / 4) * Math.PI * 2;
+  const nutGeo = new THREE.SphereGeometry(0.28, 8, 8);
+  for (let c = 0; c < 5; c++) {
+    const angle = (c / 5) * Math.PI * 2 + 0.2;
     const nut = new THREE.Mesh(nutGeo, coconutMat);
-    nut.position.set(Math.cos(angle) * 0.35, -0.2, Math.sin(angle) * 0.35);
+    nut.scale.set(0.9, 1.15, 0.9);
+    nut.position.set(Math.cos(angle) * 0.42, -0.25, Math.sin(angle) * 0.42);
+    nut.castShadow = true;
     crownGroup.add(nut);
   }
 
-  const leafMat = getCachedMaterial('palm_leaf', () => new THREE.MeshStandardMaterial({
-    color: 0x15803d,
+  // Double-layer tropical fronds:
+  // Layer 1: Upper upright arching fronds (vibrant emerald green)
+  const leafMatUpper = getCachedMaterial('palm_leaf_upper', () => new THREE.MeshStandardMaterial({
+    color: 0x16a34a,
     roughness: 0.4,
+    metalness: 0.05,
+    side: THREE.DoubleSide,
+  }));
+  // Layer 2: Lower drooping fronds (rich forest green)
+  const leafMatLower = getCachedMaterial('palm_leaf_lower', () => new THREE.MeshStandardMaterial({
+    color: 0x15803d,
+    roughness: 0.45,
+    metalness: 0.05,
     side: THREE.DoubleSide,
   }));
 
-  const numFronds = 9;
-  for (let f = 0; f < numFronds; f++) {
-    const fAngle = (f / numFronds) * Math.PI * 2;
-    const leafGeo = new THREE.ConeGeometry(0.7, 4.0, 5);
-    const leaf = new THREE.Mesh(leafGeo, leafMat);
-    leaf.scale.set(1.0, 1.0, 0.15);
-    leaf.rotation.z = Math.PI / 2 + 0.35;
+  // Upper layer: 7 fronds
+  const numUpper = 7;
+  for (let f = 0; f < numUpper; f++) {
+    const fAngle = (f / numUpper) * Math.PI * 2;
+    const leafGeo = new THREE.ConeGeometry(0.85, 4.8, 6);
+    const leaf = new THREE.Mesh(leafGeo, leafMatUpper);
+    leaf.scale.set(1.1, 1.0, 0.12);
+    leaf.rotation.z = Math.PI / 2 + 0.28;
     leaf.rotation.y = fAngle;
-    leaf.position.set(Math.cos(fAngle) * 1.8, -0.4, Math.sin(fAngle) * 1.8);
+    leaf.position.set(Math.cos(fAngle) * 2.1, 0.35, Math.sin(fAngle) * 2.1);
+    leaf.castShadow = true;
+    crownGroup.add(leaf);
+  }
+
+  // Lower drooping layer: 8 fronds
+  const numLower = 8;
+  for (let f = 0; f < numLower; f++) {
+    const fAngle = (f / numLower) * Math.PI * 2 + 0.4;
+    const leafGeo = new THREE.ConeGeometry(0.95, 5.2, 6);
+    const leaf = new THREE.Mesh(leafGeo, leafMatLower);
+    leaf.scale.set(1.15, 1.0, 0.14);
+    leaf.rotation.z = Math.PI / 2 + 0.55; // Droops downward
+    leaf.rotation.y = fAngle;
+    leaf.position.set(Math.cos(fAngle) * 2.2, -0.2, Math.sin(fAngle) * 2.2);
     leaf.castShadow = true;
     crownGroup.add(leaf);
   }
@@ -650,143 +722,490 @@ export function createPalmTree(): THREE.Group {
 }
 
 /**
- * Creates 3D Tropical Boulder
+ * Creates Lush Tropical Undergrowth / Monstera Fern Bush with colorful exotic flower
  */
-export function createTropicalRock(): THREE.Mesh {
-  const rockGeo = new THREE.DodecahedronGeometry(1.6 + Math.random() * 1.2, 1);
-  const rockMat = getCachedMaterial('rock_mat', () => new THREE.MeshStandardMaterial({
+export function createTropicalBush(): THREE.Group {
+  const bush = new THREE.Group();
+  bush.name = 'tropical_bush';
+
+  const leafMat = getCachedMaterial('monstera_leaf', () => new THREE.MeshStandardMaterial({
+    color: 0x22c55e,
+    roughness: 0.4,
+    side: THREE.DoubleSide,
+  }));
+
+  const numLeaves = 6;
+  for (let i = 0; i < numLeaves; i++) {
+    const angle = (i / numLeaves) * Math.PI * 2;
+    const leafGeo = new THREE.ConeGeometry(0.65, 2.2, 5);
+    const leaf = new THREE.Mesh(leafGeo, leafMat);
+    leaf.scale.set(1.0, 1.0, 0.12);
+    leaf.rotation.z = 1.1;
+    leaf.rotation.y = angle;
+    leaf.position.set(Math.cos(angle) * 0.8, 0.6, Math.sin(angle) * 0.8);
+    leaf.castShadow = true;
+    bush.add(leaf);
+  }
+
+  // Exotic central flower (Hibiscus)
+  const flowerMat = getCachedMaterial('hibiscus_flower', () => new THREE.MeshStandardMaterial({
+    color: 0xf43f5e, // Hot pink/red
+    roughness: 0.3,
+  }));
+  const flowerGeo = new THREE.DodecahedronGeometry(0.35, 1);
+  const flower = new THREE.Mesh(flowerGeo, flowerMat);
+  flower.position.set(0, 0.95, 0);
+  bush.add(flower);
+
+  const stamenGeo = new THREE.CylinderGeometry(0.04, 0.04, 0.35, 6);
+  const stamenMat = new THREE.MeshBasicMaterial({ color: 0xfacc15 });
+  const stamen = new THREE.Mesh(stamenGeo, stamenMat);
+  stamen.position.set(0, 1.15, 0);
+  bush.add(stamen);
+
+  return bush;
+}
+
+/**
+ * Creates 3D Tropical Boulder with moss details and sharp faceted contours
+ */
+export function createTropicalRock(): THREE.Group {
+  const group = new THREE.Group();
+  const rockGeo = new THREE.DodecahedronGeometry(1.6 + Math.random() * 1.3, 1);
+  const rockMat = getCachedMaterial('rock_mat_hd', () => new THREE.MeshStandardMaterial({
     color: 0x64748b,
-    roughness: 0.85,
+    roughness: 0.82,
     metalness: 0.1,
     flatShading: true,
   }));
   const rock = new THREE.Mesh(rockGeo, rockMat);
-  rock.scale.set(1.0 + Math.random() * 0.4, 0.7 + Math.random() * 0.4, 1.0 + Math.random() * 0.4);
+  rock.scale.set(1.1 + Math.random() * 0.4, 0.75 + Math.random() * 0.4, 1.1 + Math.random() * 0.4);
   rock.rotation.set(Math.random() * Math.PI, Math.random() * Math.PI, 0);
   rock.castShadow = true;
   rock.receiveShadow = true;
-  return rock;
+  group.add(rock);
+
+  // Moss patch on top of boulder
+  const mossMat = getCachedMaterial('rock_moss', () => new THREE.MeshStandardMaterial({
+    color: 0x4ade80,
+    roughness: 0.95,
+  }));
+  const mossGeo = new THREE.DodecahedronGeometry(0.7, 1);
+  const moss = new THREE.Mesh(mossGeo, mossMat);
+  moss.position.set(0, 0.9, 0);
+  moss.scale.set(1.2, 0.4, 1.2);
+  group.add(moss);
+
+  return group;
 }
 
 /**
- * Creates 3D Volcanic Obsidian Rock with glowing cracks
+ * Creates 3D Volcanic Obsidian Rock with glowing magma veins and heat embers
  */
 export function createVolcanicRock(): THREE.Group {
   const group = new THREE.Group();
-  const rockGeo = new THREE.DodecahedronGeometry(1.8 + Math.random() * 1.5, 1);
-  const rockMat = getCachedMaterial('volcano_rock', () => new THREE.MeshStandardMaterial({
-    color: 0x1c1917,
-    roughness: 0.9,
-    metalness: 0.3,
+  const rockGeo = new THREE.DodecahedronGeometry(2.0 + Math.random() * 1.6, 1);
+  const rockMat = getCachedMaterial('volcano_rock_hd', () => new THREE.MeshStandardMaterial({
+    color: 0x18181b,
+    roughness: 0.85,
+    metalness: 0.35,
     flatShading: true,
   }));
   const rock = new THREE.Mesh(rockGeo, rockMat);
-  rock.scale.set(1.0 + Math.random() * 0.5, 1.0 + Math.random() * 0.6, 1.0 + Math.random() * 0.5);
+  rock.scale.set(1.1 + Math.random() * 0.5, 1.0 + Math.random() * 0.6, 1.1 + Math.random() * 0.5);
   rock.castShadow = true;
   group.add(rock);
 
-  // Glowing magma vein
-  if (Math.random() > 0.4) {
-    const veinGeo = new THREE.SphereGeometry(0.6, 6, 6);
-    const veinMat = new THREE.MeshBasicMaterial({ color: 0xf97316 });
-    const vein = new THREE.Mesh(veinGeo, veinMat);
-    vein.position.set(0, 0.4, 0);
-    group.add(vein);
-  }
+  // Glowing molten lava fissures
+  const veinGeo = new THREE.SphereGeometry(0.75, 7, 7);
+  const veinMat = new THREE.MeshBasicMaterial({ color: 0xf97316 });
+  const vein = new THREE.Mesh(veinGeo, veinMat);
+  vein.position.set(0.3, 0.5, 0.3);
+  group.add(vein);
+
+  const innerLavaGeo = new THREE.SphereGeometry(0.4, 6, 6);
+  const innerLavaMat = new THREE.MeshBasicMaterial({ color: 0xfef08a });
+  const innerLava = new THREE.Mesh(innerLavaGeo, innerLavaMat);
+  innerLava.position.set(0.3, 0.5, 0.3);
+  group.add(innerLava);
 
   return group;
 }
 
 /**
- * Creates Volcanic Spire Chimney with glowing tip
+ * Creates Volcanic Spire Chimney with glowing molten fissures
  */
 export function createVolcanicSpire(): THREE.Group {
   const group = new THREE.Group();
-  const spireGeo = new THREE.ConeGeometry(2.5, 14.0, 7);
-  const spireMat = getCachedMaterial('spire_mat', () => new THREE.MeshStandardMaterial({
-    color: 0x292524,
-    roughness: 0.95,
+  const spireGeo = new THREE.ConeGeometry(2.8, 16.0, 8);
+  const spireMat = getCachedMaterial('spire_mat_hd', () => new THREE.MeshStandardMaterial({
+    color: 0x27272a,
+    roughness: 0.92,
     flatShading: true,
   }));
   const spire = new THREE.Mesh(spireGeo, spireMat);
-  spire.position.y = 7.0;
+  spire.position.y = 8.0;
   spire.castShadow = true;
   group.add(spire);
 
-  // Glowing lava top
-  const topGeo = new THREE.SphereGeometry(1.0, 8, 8);
+  // Glowing magma crater tip
+  const topGeo = new THREE.SphereGeometry(1.2, 8, 8);
   const topMat = new THREE.MeshBasicMaterial({ color: 0xef4444 });
   const top = new THREE.Mesh(topGeo, topMat);
-  top.position.y = 13.8;
+  top.position.y = 15.6;
   group.add(top);
+
+  // Molten rings running along the spire
+  const ringGeo = new THREE.TorusGeometry(1.4, 0.12, 6, 12);
+  const ringMat = new THREE.MeshBasicMaterial({ color: 0xf97316 });
+  const ring = new THREE.Mesh(ringGeo, ringMat);
+  ring.rotation.x = Math.PI / 2;
+  ring.position.y = 7.0;
+  group.add(ring);
 
   return group;
 }
 
 /**
- * Creates Snowy Pine Tree with white snow cap tiers
+ * Creates Charred Dead Volcanic Tree with smoldering ember branch tips
  */
-export function createSnowyPineTree(): THREE.Group {
+export function createCharredDeadTree(): THREE.Group {
   const tree = new THREE.Group();
+  tree.name = 'charred_tree';
 
-  const trunkGeo = new THREE.CylinderGeometry(0.3, 0.45, 3.5, 7);
-  const trunkMat = getCachedMaterial('pine_trunk', () => new THREE.MeshStandardMaterial({
-    color: 0x451a03,
-    roughness: 0.9,
+  const woodMat = getCachedMaterial('charred_wood', () => new THREE.MeshStandardMaterial({
+    color: 0x18181b,
+    roughness: 0.95,
   }));
-  const trunk = new THREE.Mesh(trunkGeo, trunkMat);
-  trunk.position.y = 1.75;
+  const emberMat = getCachedMaterial('ember_tip', () => new THREE.MeshBasicMaterial({
+    color: 0xf97316,
+  }));
+
+  // Gnarled trunk
+  const trunkGeo = new THREE.CylinderGeometry(0.35, 0.65, 5.0, 7);
+  const trunk = new THREE.Mesh(trunkGeo, woodMat);
+  trunk.position.y = 2.5;
+  trunk.rotation.z = 0.12;
   trunk.castShadow = true;
   tree.add(trunk);
 
-  const pineMat = getCachedMaterial('pine_foliage', () => new THREE.MeshStandardMaterial({
-    color: 0x1e3a2f,
-    roughness: 0.7,
-  }));
-  const snowMat = getCachedMaterial('snow_cap', () => new THREE.MeshStandardMaterial({
-    color: 0xffffff,
-    roughness: 0.8,
-  }));
-
-  const tiers = [
-    { y: 3.2, r: 2.8, h: 2.5 },
-    { y: 4.8, r: 2.2, h: 2.2 },
-    { y: 6.2, r: 1.5, h: 1.8 },
+  // 4 twisted branches
+  const branchConfigs = [
+    { len: 2.8, r: 0.22, rotZ: 0.7, rotY: 0.4, y: 3.8 },
+    { len: 2.5, r: 0.2, rotZ: -0.8, rotY: 2.1, y: 4.2 },
+    { len: 2.2, r: 0.18, rotZ: 0.9, rotY: -1.6, y: 4.5 },
+    { len: 1.8, r: 0.15, rotZ: -0.6, rotY: 3.4, y: 4.8 },
   ];
 
-  tiers.forEach(tier => {
-    const coneGeo = new THREE.ConeGeometry(tier.r, tier.h, 7);
-    const foliage = new THREE.Mesh(coneGeo, pineMat);
-    foliage.position.y = tier.y;
-    foliage.castShadow = true;
-    tree.add(foliage);
+  branchConfigs.forEach(b => {
+    const branchGeo = new THREE.CylinderGeometry(b.r * 0.5, b.r, b.len, 5);
+    const branch = new THREE.Mesh(branchGeo, woodMat);
+    branch.position.y = b.len / 2;
+    branch.castShadow = true;
 
-    const capGeo = new THREE.ConeGeometry(tier.r * 0.95, tier.h * 0.45, 7);
-    const snowCap = new THREE.Mesh(capGeo, snowMat);
-    snowCap.position.y = tier.y + tier.h * 0.28;
-    tree.add(snowCap);
+    const branchHolder = new THREE.Group();
+    branchHolder.position.y = b.y;
+    branchHolder.rotation.y = b.rotY;
+    branchHolder.rotation.z = b.rotZ;
+    branchHolder.add(branch);
+
+    // Glowing ember on branch tip
+    const emberGeo = new THREE.SphereGeometry(0.18, 6, 6);
+    const ember = new THREE.Mesh(emberGeo, emberMat);
+    ember.position.y = b.len;
+    branchHolder.add(ember);
+
+    tree.add(branchHolder);
   });
 
   return tree;
 }
 
 /**
- * Creates Ice Crystal / Glacial Spire
+ * Creates Grand Snowy Alpine Pine Tree with 4 multi-branching bough tiers,
+ * dense needle foliage, and thick sculpted snow blankets
  */
-export function createIceCrystal(): THREE.Mesh {
-  const iceGeo = new THREE.ConeGeometry(1.2, 5.0, 5);
-  const iceMat = getCachedMaterial('ice_crystal', () => new THREE.MeshStandardMaterial({
-    color: 0xbae6fd,
-    roughness: 0.1,
-    metalness: 0.2,
+export function createSnowyPineTree(): THREE.Group {
+  const tree = new THREE.Group();
+  tree.name = 'snowy_pine';
+
+  const trunkGeo = new THREE.CylinderGeometry(0.38, 0.6, 4.2, 8);
+  const trunkMat = getCachedMaterial('pine_trunk_hd', () => new THREE.MeshStandardMaterial({
+    color: 0x382214,
+    roughness: 0.92,
+  }));
+  const trunk = new THREE.Mesh(trunkGeo, trunkMat);
+  trunk.position.y = 2.1;
+  trunk.castShadow = true;
+  tree.add(trunk);
+
+  const pineMat = getCachedMaterial('pine_foliage_hd', () => new THREE.MeshStandardMaterial({
+    color: 0x143427,
+    roughness: 0.75,
+  }));
+  const snowMat = getCachedMaterial('snow_blanket_hd', () => new THREE.MeshStandardMaterial({
+    color: 0xf8fafc,
+    roughness: 0.65,
+    metalness: 0.1,
+  }));
+
+  // 4 Rich tiers of foliage with overhang snow caps
+  const tiers = [
+    { y: 3.0, r: 3.4, h: 2.8 },
+    { y: 4.8, r: 2.7, h: 2.5 },
+    { y: 6.4, r: 2.0, h: 2.2 },
+    { y: 7.8, r: 1.3, h: 1.8 },
+  ];
+
+  tiers.forEach(tier => {
+    // Pine needle cone tier
+    const coneGeo = new THREE.ConeGeometry(tier.r, tier.h, 8);
+    const foliage = new THREE.Mesh(coneGeo, pineMat);
+    foliage.position.y = tier.y;
+    foliage.castShadow = true;
+    tree.add(foliage);
+
+    // Sculpted snow blanket resting on the foliage
+    const capGeo = new THREE.ConeGeometry(tier.r * 0.96, tier.h * 0.52, 8);
+    const snowCap = new THREE.Mesh(capGeo, snowMat);
+    snowCap.position.y = tier.y + tier.h * 0.26;
+    snowCap.castShadow = true;
+    tree.add(snowCap);
+
+    // Fluffy snow overhang puffs along edge
+    for (let p = 0; p < 4; p++) {
+      const angle = (p / 4) * Math.PI * 2;
+      const puffGeo = new THREE.SphereGeometry(tier.r * 0.22, 6, 6);
+      const puff = new THREE.Mesh(puffGeo, snowMat);
+      puff.position.set(Math.cos(angle) * tier.r * 0.75, tier.y - tier.h * 0.35, Math.sin(angle) * tier.r * 0.75);
+      tree.add(puff);
+    }
+  });
+
+  return tree;
+}
+
+/**
+ * Creates Frosted Winter Birch / Deciduous Tree with silver bark and frosted branches
+ */
+export function createFrostedBirch(): THREE.Group {
+  const tree = new THREE.Group();
+  tree.name = 'frosted_birch';
+
+  const barkMat = getCachedMaterial('birch_bark', () => new THREE.MeshStandardMaterial({
+    color: 0xe2e8f0,
+    roughness: 0.6,
+  }));
+  const frostMat = getCachedMaterial('birch_frost', () => new THREE.MeshStandardMaterial({
+    color: 0xf1f5f9,
+    roughness: 0.3,
+  }));
+
+  const trunkGeo = new THREE.CylinderGeometry(0.24, 0.42, 6.0, 7);
+  const trunk = new THREE.Mesh(trunkGeo, barkMat);
+  trunk.position.y = 3.0;
+  trunk.castShadow = true;
+  tree.add(trunk);
+
+  // Canopy of frosted twigs / snow puff clusters
+  const crownPositions = [
+    { x: 0, y: 6.2, z: 0, r: 1.6 },
+    { x: 0.9, y: 5.5, z: 0.5, r: 1.2 },
+    { x: -0.8, y: 5.2, z: -0.6, r: 1.1 },
+    { x: 0.3, y: 5.0, z: -0.9, r: 1.0 },
+  ];
+
+  crownPositions.forEach(cp => {
+    const puffGeo = new THREE.DodecahedronGeometry(cp.r, 1);
+    const puff = new THREE.Mesh(puffGeo, frostMat);
+    puff.position.set(cp.x, cp.y, cp.z);
+    puff.castShadow = true;
+    tree.add(puff);
+  });
+
+  return tree;
+}
+
+/**
+ * Creates Ice Crystal / Glacial Spire with sparkling inner core
+ */
+export function createIceCrystal(): THREE.Group {
+  const group = new THREE.Group();
+  const iceGeo = new THREE.ConeGeometry(1.3, 5.5, 6);
+  const iceMat = getCachedMaterial('ice_crystal_hd', () => new THREE.MeshStandardMaterial({
+    color: 0x38bdf8,
+    roughness: 0.12,
+    metalness: 0.3,
     transparent: true,
-    opacity: 0.85,
+    opacity: 0.88,
   }));
   const ice = new THREE.Mesh(iceGeo, iceMat);
-  ice.position.y = 2.5;
-  ice.rotation.z = (Math.random() - 0.5) * 0.3;
+  ice.position.y = 2.75;
+  ice.rotation.z = (Math.random() - 0.5) * 0.25;
   ice.castShadow = true;
-  return ice;
+  group.add(ice);
+
+  // Glowing crystalline core
+  const coreGeo = new THREE.ConeGeometry(0.6, 4.0, 5);
+  const coreMat = new THREE.MeshBasicMaterial({ color: 0xe0f2fe });
+  const core = new THREE.Mesh(coreGeo, coreMat);
+  core.position.y = 2.75;
+  group.add(core);
+
+  return group;
+}
+
+/**
+ * Creates Arcade Racing Chevron Warning Board (>>>) on steel poles
+ */
+export function createDirectionalChevronSign(direction: 'left' | 'right' = 'right'): THREE.Group {
+  const group = new THREE.Group();
+  group.name = 'chevron_sign';
+
+  const boardMat = new THREE.MeshBasicMaterial({
+    map: getChevronBoardTexture(direction),
+  });
+  const boardGeo = new THREE.PlaneGeometry(6.0, 3.0);
+  const board = new THREE.Mesh(boardGeo, boardMat);
+  board.position.y = 4.0;
+  group.add(board);
+
+  // Back panel
+  const backGeo = new THREE.BoxGeometry(6.1, 3.1, 0.2);
+  const metalMat = getCachedMaterial('sign_metal', () => new THREE.MeshStandardMaterial({
+    color: 0x1e293b,
+    roughness: 0.6,
+  }));
+  const back = new THREE.Mesh(backGeo, metalMat);
+  back.position.set(0, 4.0, -0.1);
+  group.add(back);
+
+  // Dual steel mounting poles
+  const poleGeo = new THREE.CylinderGeometry(0.12, 0.12, 4.5, 6);
+  const leftPole = new THREE.Mesh(poleGeo, metalMat);
+  leftPole.position.set(-2.2, 2.25, -0.1);
+  const rightPole = new THREE.Mesh(poleGeo, metalMat);
+  rightPole.position.set(2.2, 2.25, -0.1);
+  group.add(leftPole, rightPole);
+
+  return group;
+}
+
+/**
+ * Creates Trackside Grandstand with cheering spectator crowd and waving flags
+ */
+export function createSpectatorGrandstand(theme: string): THREE.Group {
+  const grandstand = new THREE.Group();
+  grandstand.name = 'grandstand';
+
+  const steelMat = getCachedMaterial('stand_steel', () => new THREE.MeshStandardMaterial({
+    color: 0x334155,
+    roughness: 0.6,
+    metalness: 0.5,
+  }));
+  const seatMat = getCachedMaterial('stand_seat', () => new THREE.MeshStandardMaterial({
+    color: theme === 'volcano' ? 0xd97706 : theme === 'snow' ? 0x0284c7 : 0xe11d48,
+    roughness: 0.5,
+  }));
+  const roofMat = getCachedMaterial('stand_roof', () => new THREE.MeshStandardMaterial({
+    color: 0xf8fafc,
+    roughness: 0.4,
+  }));
+
+  // 3-Tier Seating Bleachers
+  for (let tier = 0; tier < 3; tier++) {
+    const stepW = 18.0;
+    const stepD = 1.6;
+    const stepH = 0.9;
+    const stepGeo = new THREE.BoxGeometry(stepW, stepH, stepD);
+    const step = new THREE.Mesh(stepGeo, seatMat);
+    step.position.set(0, (tier + 1) * stepH - stepH / 2, -tier * stepD);
+    step.castShadow = true;
+    grandstand.add(step);
+
+    // Spectator heads (colorful crowd silhouettes)
+    const numFans = 10;
+    const fanMat = getCachedMaterial(`fan_mat_${tier}`, () => new THREE.MeshStandardMaterial({
+      color: [0xfacc15, 0x38bdf8, 0x4ade80, 0xf43f5e, 0xa855f7][tier % 5],
+      roughness: 0.6,
+    }));
+    for (let f = 0; f < numFans; f++) {
+      const fanX = -7.5 + f * 1.6;
+      const headGeo = new THREE.SphereGeometry(0.32, 6, 6);
+      const head = new THREE.Mesh(headGeo, fanMat);
+      head.position.set(fanX, (tier + 1) * stepH + 0.55, -tier * stepD);
+      grandstand.add(head);
+    }
+  }
+
+  // Back wall and side pillars
+  const pillarGeo = new THREE.CylinderGeometry(0.18, 0.18, 6.5, 6);
+  const p1 = new THREE.Mesh(pillarGeo, steelMat);
+  p1.position.set(-9.0, 3.25, -4.5);
+  const p2 = new THREE.Mesh(pillarGeo, steelMat);
+  p2.position.set(9.0, 3.25, -4.5);
+  grandstand.add(p1, p2);
+
+  // Angled Canopy Roof
+  const roofGeo = new THREE.BoxGeometry(19.0, 0.25, 6.0);
+  const roof = new THREE.Mesh(roofGeo, roofMat);
+  roof.position.set(0, 6.4, -1.8);
+  roof.rotation.x = -0.18;
+  roof.castShadow = true;
+  grandstand.add(roof);
+
+  // Fluttering Pennant Flags on Roof
+  const flagMat = getCachedMaterial('pennant_flag', () => new THREE.MeshBasicMaterial({
+    color: 0xf59e0b,
+    side: THREE.DoubleSide,
+  }));
+  for (let fl = -2; fl <= 2; fl++) {
+    const poleGeo = new THREE.CylinderGeometry(0.06, 0.06, 1.4, 4);
+    const pole = new THREE.Mesh(poleGeo, steelMat);
+    pole.position.set(fl * 4.2, 7.2, -1.5);
+    grandstand.add(pole);
+
+    const pennantGeo = new THREE.ConeGeometry(0.35, 1.2, 3);
+    const pennant = new THREE.Mesh(pennantGeo, flagMat);
+    pennant.rotation.z = -Math.PI / 2;
+    pennant.position.set(fl * 4.2 + 0.6, 7.6, -1.5);
+    grandstand.add(pennant);
+  }
+
+  return grandstand;
+}
+
+/**
+ * Creates Trackside Torch / Lantern with glowing light
+ */
+export function createTracksideTorch(theme: string): THREE.Group {
+  const group = new THREE.Group();
+
+  const postMat = getCachedMaterial('torch_post', () => new THREE.MeshStandardMaterial({
+    color: theme === 'tropical' ? 0x78350f : 0x1e293b,
+    roughness: 0.8,
+  }));
+  const poleGeo = new THREE.CylinderGeometry(0.1, 0.14, 3.2, 6);
+  const pole = new THREE.Mesh(poleGeo, postMat);
+  pole.position.y = 1.6;
+  pole.castShadow = true;
+  group.add(pole);
+
+  // Flame / Crystal Bowl
+  const bowlGeo = new THREE.CylinderGeometry(0.32, 0.18, 0.4, 6);
+  const bowl = new THREE.Mesh(bowlGeo, postMat);
+  bowl.position.y = 3.3;
+  group.add(bowl);
+
+  // Glowing Flame / Light
+  const flameColor = theme === 'volcano' ? 0xef4444 : theme === 'snow' ? 0x38bdf8 : 0xf97316;
+  const flameGeo = new THREE.ConeGeometry(0.25, 0.7, 6);
+  const flameMat = new THREE.MeshBasicMaterial({ color: flameColor });
+  const flame = new THREE.Mesh(flameGeo, flameMat);
+  flame.position.y = 3.75;
+  group.add(flame);
+
+  return group;
 }
 
 /**
@@ -861,49 +1280,84 @@ export function createBoostPadMesh(): THREE.Group {
 }
 
 /**
- * Creates Start / Finish Gantry Archway
+ * Creates High-Definition Start / Finish Gantry Archway with race truss columns,
+ * professional textured Grand Prix banner, and 5-light starting gantry
  */
 export function createStartFinishGantry(trackName: string = 'BEACH KART GP'): THREE.Group {
   const gantry = new THREE.Group();
+  gantry.name = 'start_finish_gantry';
 
-  const woodMat = getCachedMaterial('gantry_wood', () => new THREE.MeshStandardMaterial({
-    color: 0x78350f,
-    roughness: 0.7,
+  const trussMat = getCachedMaterial('gantry_truss', () => new THREE.MeshStandardMaterial({
+    color: 0x334155,
+    roughness: 0.5,
+    metalness: 0.6,
+  }));
+  const accentMat = getCachedMaterial('gantry_accent', () => new THREE.MeshStandardMaterial({
+    color: 0xf59e0b,
+    roughness: 0.4,
+    metalness: 0.2,
   }));
 
-  const pillarGeo = new THREE.CylinderGeometry(0.5, 0.6, 7.5, 10);
-  const leftPillar = new THREE.Mesh(pillarGeo, woodMat);
-  leftPillar.position.set(-9.5, 3.75, 0);
-  leftPillar.castShadow = true;
+  // Dual lattice steel pillars on left & right
+  [-9.5, 9.5].forEach(xPos => {
+    // Main uprights
+    const mainPillarGeo = new THREE.CylinderGeometry(0.35, 0.45, 8.5, 8);
+    const mainPillar = new THREE.Mesh(mainPillarGeo, trussMat);
+    mainPillar.position.set(xPos, 4.25, 0);
+    mainPillar.castShadow = true;
+    gantry.add(mainPillar);
 
-  const rightPillar = new THREE.Mesh(pillarGeo, woodMat);
-  rightPillar.position.set(9.5, 3.75, 0);
-  rightPillar.castShadow = true;
-  gantry.add(leftPillar, rightPillar);
+    // Concrete base pedestal
+    const baseGeo = new THREE.BoxGeometry(1.6, 0.9, 1.6);
+    const base = new THREE.Mesh(baseGeo, trussMat);
+    base.position.set(xPos, 0.45, 0);
+    base.castShadow = true;
+    gantry.add(base);
 
-  const beamGeo = new THREE.BoxGeometry(21.0, 0.8, 0.8);
-  const beam = new THREE.Mesh(beamGeo, woodMat);
-  beam.position.set(0, 7.2, 0);
+    // Safety yellow hazard stripes base
+    const stripeGeo = new THREE.BoxGeometry(1.62, 0.3, 1.62);
+    const stripe = new THREE.Mesh(stripeGeo, accentMat);
+    stripe.position.set(xPos, 0.45, 0);
+    gantry.add(stripe);
+  });
+
+  // Heavy overhead steel cross-beam truss
+  const beamGeo = new THREE.BoxGeometry(20.5, 1.0, 1.2);
+  const beam = new THREE.Mesh(beamGeo, trussMat);
+  beam.position.set(0, 8.2, 0);
   beam.castShadow = true;
   gantry.add(beam);
 
-  const signGeo = new THREE.BoxGeometry(14.0, 1.8, 0.3);
-  const signMat = new THREE.MeshStandardMaterial({
-    color: 0xf59e0b,
-    roughness: 0.4,
-  });
-  const sign = new THREE.Mesh(signGeo, signMat);
-  sign.position.set(0, 6.2, 0);
-  gantry.add(sign);
-
-  const bannerGeo = new THREE.BoxGeometry(14.0, 0.5, 0.32);
-  const bannerMat = new THREE.MeshStandardMaterial({
-    color: 0xffffff,
-    roughness: 0.5,
+  // Large High-Res Printed Grand Prix Banner
+  const bannerGeo = new THREE.BoxGeometry(15.0, 2.5, 0.35);
+  const bannerMat = new THREE.MeshBasicMaterial({
+    map: getGantryBannerTexture(trackName),
   });
   const banner = new THREE.Mesh(bannerGeo, bannerMat);
-  banner.position.set(0, 5.2, 0);
+  banner.position.set(0, 6.8, 0);
   gantry.add(banner);
+
+  // 5-Light Starting Signal Pod suspended under gantry
+  const podGeo = new THREE.BoxGeometry(6.5, 0.9, 0.6);
+  const podMat = getCachedMaterial('light_pod', () => new THREE.MeshStandardMaterial({
+    color: 0x09090b,
+    roughness: 0.4,
+  }));
+  const pod = new THREE.Mesh(podGeo, podMat);
+  pod.position.set(0, 5.0, 0);
+  gantry.add(pod);
+
+  // 5 LED Starting Lights (Red & Green)
+  for (let l = 0; l < 5; l++) {
+    const lx = -2.4 + l * 1.2;
+    const bulbGeo = new THREE.SphereGeometry(0.24, 8, 8);
+    const bulbMat = new THREE.MeshBasicMaterial({
+      color: l >= 3 ? 0x22c55e : 0xef4444, // 2 green, 3 red
+    });
+    const bulb = new THREE.Mesh(bulbGeo, bulbMat);
+    bulb.position.set(lx, 5.0, 0.32);
+    gantry.add(bulb);
+  }
 
   return gantry;
 }

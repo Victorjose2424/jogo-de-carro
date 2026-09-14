@@ -1,18 +1,29 @@
 import * as THREE from 'three';
 import { TrackDataBundle, ItemBox, RacerState } from '../types';
-import { WAYPOINTS_COUNT } from './trackData';
+import { WAYPOINTS_COUNT, getClosestWaypoint } from './trackData';
 import {
   createPalmTree,
+  createTropicalBush,
   createTropicalRock,
   createVolcanicRock,
   createVolcanicSpire,
+  createCharredDeadTree,
   createSnowyPineTree,
+  createFrostedBirch,
   createIceCrystal,
   createItemBoxMesh,
   createBoostPadMesh,
   createStartFinishGantry,
+  createSpectatorGrandstand,
+  createDirectionalChevronSign,
+  createTracksideTorch,
   createRampModel,
 } from './models';
+import {
+  getProceduralRoadTexture,
+  getCheckeredFinishLineTexture,
+  getBridgePlankTexture,
+} from './environmentTextures';
 
 export interface SceneBundle {
   scene: THREE.Scene;
@@ -89,6 +100,76 @@ export function initThreeScene(
   fillLight.position.set(-120, 90, -120);
   scene.add(fillLight);
 
+  // Stylized Radiant Sun Disc
+  const sunDiscGeo = new THREE.SphereGeometry(22, 16, 16);
+  const sunDiscMat = new THREE.MeshBasicMaterial({
+    color: theme === 'volcano' ? 0xff4500 : theme === 'snow' ? 0xfffbeb : 0xfef08a,
+  });
+  const sunDisc = new THREE.Mesh(sunDiscGeo, sunDiscMat);
+  sunDisc.position.set(320, 480, 240);
+  scene.add(sunDisc);
+
+  // Low-Poly Volumetric Drifting Clouds
+  const cloudsGroup = new THREE.Group();
+  const cloudMat = new THREE.MeshStandardMaterial({
+    color: theme === 'volcano' ? 0x475569 : 0xffffff,
+    roughness: 0.95,
+    flatShading: true,
+  });
+  const cloudList: THREE.Group[] = [];
+
+  for (let c = 0; c < 22; c++) {
+    const cloud = new THREE.Group();
+    const numPuffs = 5 + Math.floor(Math.random() * 4);
+    for (let p = 0; p < numPuffs; p++) {
+      const puffR = 6.0 + Math.random() * 7.0;
+      const puffGeo = new THREE.SphereGeometry(puffR, 7, 6);
+      const puff = new THREE.Mesh(puffGeo, cloudMat);
+      puff.position.set(
+        (p - numPuffs / 2) * 8.0 + (Math.random() - 0.5) * 4,
+        (Math.random() - 0.5) * 4,
+        (Math.random() - 0.5) * 8
+      );
+      puff.scale.y = 0.65;
+      cloud.add(puff);
+    }
+    cloud.position.set(
+      (Math.random() - 0.5) * 900,
+      95 + Math.random() * 55,
+      (Math.random() - 0.5) * 900
+    );
+    cloudsGroup.add(cloud);
+    cloudList.push(cloud);
+  }
+  scene.add(cloudsGroup);
+
+  // Weather Atmosphere Particles (Snowflakes or Volcano Embers)
+  let weatherParticleGeo: THREE.BufferGeometry | null = null;
+  let weatherParticles: THREE.Points | null = null;
+  let weatherPositions: Float32Array | null = null;
+  const WEATHER_COUNT = theme === 'snow' ? 400 : theme === 'volcano' ? 180 : 0;
+
+  if (WEATHER_COUNT > 0) {
+    weatherParticleGeo = new THREE.BufferGeometry();
+    weatherPositions = new Float32Array(WEATHER_COUNT * 3);
+
+    for (let p = 0; p < WEATHER_COUNT; p++) {
+      weatherPositions[p * 3] = (Math.random() - 0.5) * 500;
+      weatherPositions[p * 3 + 1] = Math.random() * 60;
+      weatherPositions[p * 3 + 2] = (Math.random() - 0.5) * 500;
+    }
+
+    weatherParticleGeo.setAttribute('position', new THREE.BufferAttribute(weatherPositions, 3));
+    const pMat = new THREE.PointsMaterial({
+      color: theme === 'snow' ? 0xffffff : 0xf97316,
+      size: theme === 'snow' ? 0.9 : 1.4,
+      transparent: true,
+      opacity: theme === 'snow' ? 0.85 : 0.9,
+    });
+    weatherParticles = new THREE.Points(weatherParticleGeo, pMat);
+    scene.add(weatherParticles);
+  }
+
   // Themed Liquid Plane (Ocean, Molten Lava, or Frozen Lake)
   const liquidGeo = new THREE.PlaneGeometry(1800, 1800, 32, 32);
   const liquidMat = new THREE.MeshStandardMaterial({
@@ -107,20 +188,51 @@ export function initThreeScene(
   scene.add(liquidPlane);
 
   // Themed Terrain Plane
-  const terrainGeo = new THREE.PlaneGeometry(1000, 1000, 48, 48);
+  const [bStart, bEnd] = trackBundle.bridgeRange;
+  const terrainGeo = new THREE.PlaneGeometry(1000, 1000, 64, 64);
   const posAttr = terrainGeo.attributes.position;
   for (let i = 0; i < posAttr.count; i++) {
     const vx = posAttr.getX(i);
     const vy = posAttr.getY(i);
-    let h = 0;
+    const worldX = vx;
+    const worldZ = -vy;
+
+    let naturalH = 0;
     if (theme === 'volcano') {
-      h = Math.sin(vx * 0.015) * Math.cos(vy * 0.015) * 3.5 + Math.sin(vx * 0.03) * 1.5;
+      naturalH = Math.sin(vx * 0.015) * Math.cos(vy * 0.015) * 3.5 + Math.sin(vx * 0.03) * 1.5;
     } else if (theme === 'snow') {
-      h = Math.sin(vx * 0.012) * Math.cos(vy * 0.012) * 2.8 + Math.cos(vy * 0.02) * 2.0;
+      naturalH = Math.sin(vx * 0.012) * Math.cos(vy * 0.012) * 2.8 + Math.cos(vy * 0.02) * 2.0;
     } else {
-      h = Math.sin(vx * 0.02) * Math.cos(vy * 0.02) * 1.8 + Math.sin(vx * 0.008) * 3.0;
+      naturalH = Math.sin(vx * 0.02) * Math.cos(vy * 0.02) * 1.8 + Math.sin(vx * 0.008) * 3.0;
     }
-    posAttr.setZ(i, Math.max(h - 1.0, -0.4));
+    const baseTerrainH = Math.max(naturalH - 1.0, -0.3);
+
+    // Sculpt terrain to fit cleanly beneath track waypoints without protruding
+    const wpInfo = getClosestWaypoint(waypoints, worldX, worldZ);
+    const wp = waypoints[wpInfo.index];
+    const distToTrack = Math.sqrt(wpInfo.distSq);
+    const halfW = wp.width / 2;
+    const isBridgeSection = wpInfo.index >= bStart && wpInfo.index <= bEnd;
+
+    let finalH = baseTerrainH;
+    if (isBridgeSection) {
+      if (distToTrack < halfW + 12.0) {
+        finalH = -0.55; // lowered below water plane (-0.2)
+      } else if (distToTrack < halfW + 28.0) {
+        const t = (distToTrack - (halfW + 12.0)) / 16.0;
+        finalH = -0.55 * (1 - t) + baseTerrainH * t;
+      }
+    } else {
+      const roadBedH = wp.y - 0.25;
+      if (distToTrack <= halfW + 2.0) {
+        finalH = roadBedH;
+      } else if (distToTrack <= halfW + 24.0) {
+        const t = (distToTrack - (halfW + 2.0)) / 22.0;
+        finalH = roadBedH * (1 - t) + baseTerrainH * t;
+      }
+    }
+
+    posAttr.setZ(i, finalH);
   }
   terrainGeo.computeVertexNormals();
 
@@ -184,7 +296,7 @@ export function initThreeScene(
     roadVertices.push(leftX, leftY + 0.05, leftZ);
     roadVertices.push(rightX, rightY + 0.05, rightZ);
 
-    const vCoord = i * 0.15;
+    const vCoord = i * 0.12;
     roadUVs.push(0, vCoord);
     roadUVs.push(1, vCoord);
 
@@ -197,18 +309,18 @@ export function initThreeScene(
       roadIndices.push(v1, v2, v3);
     }
 
-    // Outer curb edges
-    const curbW = 1.0;
+    // Outer curb edges with 3D beveled rumble profile
+    const curbW = 1.1;
     const curbLeftOutX = leftX + wp.normalX * curbW;
     const curbLeftOutZ = leftZ + wp.normalZ * curbW;
     const curbRightOutX = rightX - wp.normalX * curbW;
     const curbRightOutZ = rightZ - wp.normalZ * curbW;
 
     const baseCurbIdx = i * 4;
-    curbVertices.push(leftX, leftY + 0.08, leftZ);
-    curbVertices.push(curbLeftOutX, leftY + 0.04, curbLeftOutZ);
-    curbVertices.push(rightX, rightY + 0.08, rightZ);
-    curbVertices.push(curbRightOutX, rightY + 0.04, curbRightOutZ);
+    curbVertices.push(leftX, leftY + 0.10, leftZ);
+    curbVertices.push(curbLeftOutX, leftY + 0.03, curbLeftOutZ);
+    curbVertices.push(rightX, rightY + 0.10, rightZ);
+    curbVertices.push(curbRightOutX, rightY + 0.03, curbRightOutZ);
 
     const isRed = Math.floor(i / 2) % 2 === 0;
     let cr = isRed ? 0.95 : 0.95;
@@ -216,13 +328,13 @@ export function initThreeScene(
     let cb = isRed ? 0.18 : 0.95;
 
     if (theme === 'snow') {
-      cr = isRed ? 0.2 : 0.95;
-      cg = isRed ? 0.6 : 0.95;
-      cb = isRed ? 0.95 : 0.95;
+      cr = isRed ? 0.15 : 0.95;
+      cg = isRed ? 0.65 : 0.95;
+      cb = isRed ? 0.98 : 0.95;
     } else if (theme === 'volcano') {
-      cr = isRed ? 0.95 : 0.95;
-      cg = isRed ? 0.35 : 0.75;
-      cb = isRed ? 0.05 : 0.1;
+      cr = isRed ? 0.98 : 0.85;
+      cg = isRed ? 0.35 : 0.55;
+      cb = isRed ? 0.05 : 0.15;
     }
 
     for (let c = 0; c < 4; c++) {
@@ -246,24 +358,24 @@ export function initThreeScene(
     }
   }
 
-  // Road geometry
+  // High-Definition Road Geometry & Material
   const roadGeo = new THREE.BufferGeometry();
   roadGeo.setAttribute('position', new THREE.Float32BufferAttribute(roadVertices, 3));
   roadGeo.setAttribute('uv', new THREE.Float32BufferAttribute(roadUVs, 2));
   roadGeo.setIndex(roadIndices);
   roadGeo.computeVertexNormals();
 
-  const roadColor = theme === 'volcano' ? 0x262626 : theme === 'snow' ? 0x475569 : 0x334155;
+  const roadTexture = getProceduralRoadTexture(theme);
   const roadMat = new THREE.MeshStandardMaterial({
-    color: roadColor,
-    roughness: 0.6,
+    map: roadTexture,
+    roughness: theme === 'snow' ? 0.7 : 0.65,
     metalness: 0.1,
   });
   const roadMesh = new THREE.Mesh(roadGeo, roadMat);
   roadMesh.receiveShadow = true;
   scene.add(roadMesh);
 
-  // Curb geometry
+  // Beveled Curb Geometry
   const curbGeo = new THREE.BufferGeometry();
   curbGeo.setAttribute('position', new THREE.Float32BufferAttribute(curbVertices, 3));
   curbGeo.setAttribute('color', new THREE.Float32BufferAttribute(curbColors, 3));
@@ -272,25 +384,30 @@ export function initThreeScene(
 
   const curbMat = new THREE.MeshStandardMaterial({
     vertexColors: true,
-    roughness: 0.5,
+    roughness: 0.45,
+    metalness: 0.1,
   });
   const curbMesh = new THREE.Mesh(curbGeo, curbMat);
   curbMesh.receiveShadow = true;
   scene.add(curbMesh);
 
-  // Bridge Section Over Liquid
-  const [bStart, bEnd] = trackBundle.bridgeRange;
+  // Upgraded Bridge Section Over Liquid
   const bridgeGroup = new THREE.Group();
-  const plankColor = theme === 'volcano' ? 0x3f3f46 : theme === 'snow' ? 0x713f12 : 0x78350f;
-  const plankMat = new THREE.MeshStandardMaterial({ color: plankColor, roughness: 0.8 });
-  const postMat = new THREE.MeshStandardMaterial({ color: 0x1f2937, roughness: 0.9 });
+  const plankTexture = getBridgePlankTexture(theme);
+  const plankMat = new THREE.MeshStandardMaterial({
+    map: plankTexture,
+    roughness: 0.75,
+    metalness: 0.15,
+  });
+  const postMat = new THREE.MeshStandardMaterial({ color: 0x1e293b, roughness: 0.85 });
+  const handrailMat = new THREE.MeshStandardMaterial({ color: 0x334155, roughness: 0.7 });
 
   for (let i = bStart; i <= bEnd; i += 2) {
     const wp = waypoints[i];
     const nextWp = waypoints[(i + 1) % WAYPOINTS_COUNT];
     const angleY = Math.atan2(nextWp.x - wp.x, nextWp.z - wp.z);
 
-    const plankGeo = new THREE.BoxGeometry(wp.width + 1.2, 0.25, 1.4);
+    const plankGeo = new THREE.BoxGeometry(wp.width + 1.4, 0.28, 1.4);
     const plank = new THREE.Mesh(plankGeo, plankMat);
     plank.position.set(wp.x, wp.y + 0.08, wp.z);
     plank.rotation.y = angleY + Math.PI / 2;
@@ -299,28 +416,47 @@ export function initThreeScene(
     bridgeGroup.add(plank);
 
     // Railing posts
-    const postGeo = new THREE.CylinderGeometry(0.12, 0.12, 1.4, 6);
+    const postGeo = new THREE.CylinderGeometry(0.12, 0.12, 1.5, 6);
     const leftPost = new THREE.Mesh(postGeo, postMat);
-    leftPost.position.set(wp.x + wp.normalX * (wp.width / 2 + 0.4), wp.y + 0.7, wp.z + wp.normalZ * (wp.width / 2 + 0.4));
+    leftPost.position.set(wp.x + wp.normalX * (wp.width / 2 + 0.45), wp.y + 0.75, wp.z + wp.normalZ * (wp.width / 2 + 0.45));
     bridgeGroup.add(leftPost);
 
     const rightPost = new THREE.Mesh(postGeo, postMat);
-    rightPost.position.set(wp.x - wp.normalX * (wp.width / 2 + 0.4), wp.y + 0.7, wp.z - wp.normalZ * (wp.width / 2 + 0.4));
+    rightPost.position.set(wp.x - wp.normalX * (wp.width / 2 + 0.45), wp.y + 0.75, wp.z - wp.normalZ * (wp.width / 2 + 0.45));
     bridgeGroup.add(rightPost);
 
-    // Pilings
+    // Top Handrail segment connecting posts
+    const railGeo = new THREE.BoxGeometry(0.16, 0.16, 2.3);
+    const leftRail = new THREE.Mesh(railGeo, handrailMat);
+    leftRail.position.set(wp.x + wp.normalX * (wp.width / 2 + 0.45), wp.y + 1.45, wp.z + wp.normalZ * (wp.width / 2 + 0.45));
+    leftRail.rotation.y = angleY;
+    bridgeGroup.add(leftRail);
+
+    const rightRail = new THREE.Mesh(railGeo, handrailMat);
+    rightRail.position.set(wp.x - wp.normalX * (wp.width / 2 + 0.45), wp.y + 1.45, wp.z - wp.normalZ * (wp.width / 2 + 0.45));
+    rightRail.rotation.y = angleY;
+    bridgeGroup.add(rightRail);
+
+    // Heavy pilings sunk into waterbed
     if (i % 6 === 0) {
-      const pilingGeo = new THREE.CylinderGeometry(0.4, 0.45, 6.0, 8);
+      const pilingGeo = new THREE.CylinderGeometry(0.4, 0.45, 7.0, 8);
       const leftPiling = new THREE.Mesh(pilingGeo, postMat);
-      leftPiling.position.set(wp.x + wp.normalX * (wp.width / 2), wp.y - 1.8, wp.z + wp.normalZ * (wp.width / 2));
+      leftPiling.position.set(wp.x + wp.normalX * (wp.width / 2), wp.y - 2.0, wp.z + wp.normalZ * (wp.width / 2));
       const rightPiling = new THREE.Mesh(pilingGeo, postMat);
-      rightPiling.position.set(wp.x - wp.normalX * (wp.width / 2), wp.y - 1.8, wp.z - wp.normalZ * (wp.width / 2));
+      rightPiling.position.set(wp.x - wp.normalX * (wp.width / 2), wp.y - 2.0, wp.z - wp.normalZ * (wp.width / 2));
       bridgeGroup.add(leftPiling, rightPiling);
+    }
+
+    // Bridge illumination torches/lanterns
+    if (i % 8 === 0) {
+      const torch = createTracksideTorch(theme);
+      torch.position.set(wp.x + wp.normalX * (wp.width / 2 + 0.45), wp.y + 1.5, wp.z + wp.normalZ * (wp.width / 2 + 0.45));
+      bridgeGroup.add(torch);
     }
   }
   scene.add(bridgeGroup);
 
-  // Start / Finish Gantry
+  // Start / Finish Gantry with Starting Signal Lights
   const startWp = waypoints[0];
   const nextWp = waypoints[1];
   const gantry = createStartFinishGantry(trackDef.name.toUpperCase());
@@ -328,14 +464,59 @@ export function initThreeScene(
   gantry.rotation.y = Math.atan2(nextWp.x - startWp.x, nextWp.z - startWp.z);
   scene.add(gantry);
 
-  // Checkered Start Line On Track
-  const lineGeo = new THREE.PlaneGeometry(startWp.width, 2.5);
-  const lineMat = new THREE.MeshBasicMaterial({ color: 0xffffff });
+  // High-Definition Checkered Start / Finish Line On Track
+  const lineGeo = new THREE.PlaneGeometry(startWp.width, 3.2);
+  const lineMat = new THREE.MeshBasicMaterial({
+    map: getCheckeredFinishLineTexture(),
+    transparent: true,
+  });
   const startLine = new THREE.Mesh(lineGeo, lineMat);
   startLine.rotation.x = -Math.PI / 2;
   startLine.rotation.z = Math.atan2(nextWp.x - startWp.x, nextWp.z - startWp.z) + Math.PI / 2;
   startLine.position.set(startWp.x, startWp.y + 0.08, startWp.z);
   scene.add(startLine);
+
+  // Spectator Grandstands on Left and Right of Start/Finish Straight
+  const trackHeading = Math.atan2(nextWp.x - startWp.x, nextWp.z - startWp.z);
+  const leftGrandstand = createSpectatorGrandstand(theme);
+  leftGrandstand.position.set(
+    startWp.x + startWp.normalX * (startWp.width / 2 + 7.5),
+    startWp.y,
+    startWp.z + startWp.normalZ * (startWp.width / 2 + 7.5)
+  );
+  leftGrandstand.rotation.y = trackHeading + Math.PI / 2;
+  scene.add(leftGrandstand);
+
+  const rightGrandstand = createSpectatorGrandstand(theme);
+  rightGrandstand.position.set(
+    startWp.x - startWp.normalX * (startWp.width / 2 + 7.5),
+    startWp.y,
+    startWp.z - startWp.normalZ * (startWp.width / 2 + 7.5)
+  );
+  rightGrandstand.rotation.y = trackHeading - Math.PI / 2;
+  scene.add(rightGrandstand);
+
+  // Directional Chevron Warning Signs at Sharp Curves
+  for (let i = 8; i < WAYPOINTS_COUNT - 8; i += 5) {
+    const wp = waypoints[i];
+    const wpAhead = waypoints[(i + 5) % WAYPOINTS_COUNT];
+    // Cross product of 2D tangents determines turn direction and sharpness
+    const cross = wp.tangentX * wpAhead.tangentZ - wp.tangentZ * wpAhead.tangentX;
+    if (Math.abs(cross) > 0.32) {
+      const isRightTurn = cross > 0;
+      const chevron = createDirectionalChevronSign(isRightTurn ? 'right' : 'left');
+      // Place on outer shoulder of turn
+      const side = isRightTurn ? 1 : -1;
+      const dist = wp.width / 2 + 2.8;
+      chevron.position.set(
+        wp.x + wp.normalX * dist * side,
+        wp.y,
+        wp.z + wp.normalZ * dist * side
+      );
+      chevron.rotation.y = Math.atan2(wp.tangentX, wp.tangentZ) + (isRightTurn ? -0.35 : 0.35);
+      scene.add(chevron);
+    }
+  }
 
   // Speed Boost Pads
   const boostPads: THREE.Group[] = [];
@@ -396,11 +577,12 @@ export function initThreeScene(
     });
   });
 
-  // Themed Environment Props
+  // Themed Environment Props with High Quality Vegetation & Scenery
   const sceneryGroup = new THREE.Group();
+  const treesWithSway: THREE.Object3D[] = [];
 
   if (theme === 'volcano') {
-    // Volcanic spires and obsidian boulders
+    // Volcanic spires with glowing molten fissures
     for (let i = 0; i < 45; i++) {
       const spire = createVolcanicSpire();
       const wpIdx = (i * 9 + 4) % WAYPOINTS_COUNT;
@@ -410,6 +592,20 @@ export function initThreeScene(
       spire.position.set(wp.x + wp.normalX * dist * side, Math.max(wp.y, 0), wp.z + wp.normalZ * dist * side);
       sceneryGroup.add(spire);
     }
+    // Charred dead trees with smoldering embers
+    for (let t = 0; t < 45; t++) {
+      const deadTree = createCharredDeadTree();
+      const wpIdx = (t * 7 + 1) % WAYPOINTS_COUNT;
+      const wp = waypoints[wpIdx];
+      const side = t % 2 === 0 ? 1 : -1;
+      const dist = wp.width / 2 + 4.5 + Math.random() * 18;
+      const s = 0.85 + Math.random() * 0.4;
+      deadTree.scale.set(s, s, s);
+      deadTree.position.set(wp.x + wp.normalX * dist * side, Math.max(wp.y, 0), wp.z + wp.normalZ * dist * side);
+      sceneryGroup.add(deadTree);
+      treesWithSway.push(deadTree);
+    }
+    // Obsidian boulders with magma veins
     for (let r = 0; r < 50; r++) {
       const rock = createVolcanicRock();
       const wpIdx = (r * 7 + 2) % WAYPOINTS_COUNT;
@@ -419,19 +615,44 @@ export function initThreeScene(
       rock.position.set(wp.x + wp.normalX * dist * side, Math.max(wp.y - 0.2, 0), wp.z + wp.normalZ * dist * side);
       sceneryGroup.add(rock);
     }
+    // Trackside lava torches
+    for (let tr = 0; tr < 25; tr++) {
+      const torch = createTracksideTorch('volcano');
+      const wpIdx = (tr * 16 + 8) % WAYPOINTS_COUNT;
+      const wp = waypoints[wpIdx];
+      const side = tr % 2 === 0 ? 1 : -1;
+      const dist = wp.width / 2 + 1.8;
+      torch.position.set(wp.x + wp.normalX * dist * side, wp.y, wp.z + wp.normalZ * dist * side);
+      sceneryGroup.add(torch);
+    }
   } else if (theme === 'snow') {
-    // Snowy pine trees and ice crystals
+    // Grand Snowy Alpine Pine Trees
     for (let i = 0; i < 80; i++) {
       const tree = createSnowyPineTree();
       const wpIdx = (i * 5 + 3) % WAYPOINTS_COUNT;
       const wp = waypoints[wpIdx];
       const side = i % 2 === 0 ? 1 : -1;
       const dist = wp.width / 2 + 4.5 + Math.random() * 22;
-      const s = 0.8 + Math.random() * 0.5;
+      const s = 0.85 + Math.random() * 0.55;
       tree.scale.set(s, s, s);
       tree.position.set(wp.x + wp.normalX * dist * side, Math.max(wp.y, 0), wp.z + wp.normalZ * dist * side);
       sceneryGroup.add(tree);
+      treesWithSway.push(tree);
     }
+    // Frosted Silver Birch Trees
+    for (let b = 0; b < 35; b++) {
+      const birch = createFrostedBirch();
+      const wpIdx = (b * 11 + 5) % WAYPOINTS_COUNT;
+      const wp = waypoints[wpIdx];
+      const side = b % 2 === 0 ? 1 : -1;
+      const dist = wp.width / 2 + 4.0 + Math.random() * 16;
+      const s = 0.8 + Math.random() * 0.4;
+      birch.scale.set(s, s, s);
+      birch.position.set(wp.x + wp.normalX * dist * side, Math.max(wp.y, 0), wp.z + wp.normalZ * dist * side);
+      sceneryGroup.add(birch);
+      treesWithSway.push(birch);
+    }
+    // Sparkling Glacial Ice Crystals
     for (let c = 0; c < 35; c++) {
       const crystal = createIceCrystal();
       const wpIdx = (c * 11 + 6) % WAYPOINTS_COUNT;
@@ -441,20 +662,44 @@ export function initThreeScene(
       crystal.position.set(wp.x + wp.normalX * dist * side, Math.max(wp.y, 0), wp.z + wp.normalZ * dist * side);
       sceneryGroup.add(crystal);
     }
+    // Trackside snow lanterns
+    for (let tr = 0; tr < 25; tr++) {
+      const lantern = createTracksideTorch('snow');
+      const wpIdx = (tr * 16 + 8) % WAYPOINTS_COUNT;
+      const wp = waypoints[wpIdx];
+      const side = tr % 2 === 0 ? 1 : -1;
+      const dist = wp.width / 2 + 1.8;
+      lantern.position.set(wp.x + wp.normalX * dist * side, wp.y, wp.z + wp.normalZ * dist * side);
+      sceneryGroup.add(lantern);
+    }
   } else {
-    // Tropical Beach: Palm trees and rocks
-    for (let i = 0; i < 85; i++) {
+    // Tropical Beach: Curved Lush Palm Trees with double-tier fronds and coconuts
+    for (let i = 0; i < 90; i++) {
       const palm = createPalmTree();
       const wpIdx = (i * 4 + 2) % WAYPOINTS_COUNT;
       const wp = waypoints[wpIdx];
       const side = i % 2 === 0 ? 1 : -1;
-      const dist = wp.width / 2 + 4.5 + Math.random() * 18;
-      const scale = 0.85 + Math.random() * 0.45;
+      const dist = wp.width / 2 + 4.5 + Math.random() * 20;
+      const scale = 0.85 + Math.random() * 0.5;
       palm.position.set(wp.x + wp.normalX * dist * side, Math.max(wp.y, 0), wp.z + wp.normalZ * dist * side);
       palm.scale.set(scale, scale, scale);
       palm.rotation.y = Math.random() * Math.PI * 2;
       sceneryGroup.add(palm);
+      treesWithSway.push(palm);
     }
+    // Lush Tropical Flower Bushes (Monstera foliage with vibrant hibiscus flowers)
+    for (let fb = 0; fb < 50; fb++) {
+      const bush = createTropicalBush();
+      const wpIdx = (fb * 7 + 3) % WAYPOINTS_COUNT;
+      const wp = waypoints[wpIdx];
+      const side = fb % 2 === 0 ? 1 : -1;
+      const dist = wp.width / 2 + 2.5 + Math.random() * 10;
+      const s = 0.85 + Math.random() * 0.4;
+      bush.scale.set(s, s, s);
+      bush.position.set(wp.x + wp.normalX * dist * side, Math.max(wp.y, 0), wp.z + wp.normalZ * dist * side);
+      sceneryGroup.add(bush);
+    }
+    // Mossy Tropical Boulders
     for (let r = 0; r < 40; r++) {
       const rock = createTropicalRock();
       const wpIdx = (r * 9 + 5) % WAYPOINTS_COUNT;
@@ -463,6 +708,16 @@ export function initThreeScene(
       const dist = wp.width / 2 + 2.5 + Math.random() * 12;
       rock.position.set(wp.x + wp.normalX * dist * side, Math.max(wp.y - 0.3, 0), wp.z + wp.normalZ * dist * side);
       sceneryGroup.add(rock);
+    }
+    // Trackside Tiki Torches
+    for (let tr = 0; tr < 25; tr++) {
+      const tiki = createTracksideTorch('tropical');
+      const wpIdx = (tr * 16 + 8) % WAYPOINTS_COUNT;
+      const wp = waypoints[wpIdx];
+      const side = tr % 2 === 0 ? 1 : -1;
+      const dist = wp.width / 2 + 1.8;
+      tiki.position.set(wp.x + wp.normalX * dist * side, wp.y, wp.z + wp.normalZ * dist * side);
+      sceneryGroup.add(tiki);
     }
   }
   scene.add(sceneryGroup);
@@ -550,6 +805,47 @@ export function initThreeScene(
     } else if (theme === 'volcano') {
       liquidPlane.position.y = -0.2 + Math.sin(time * 2.5) * 0.12;
       (liquidMat as THREE.MeshStandardMaterial).emissiveIntensity = 0.5 + Math.sin(time * 3.0) * 0.2;
+    }
+
+    // Drifting Volumetric Clouds Across the Sky
+    cloudList.forEach(cloud => {
+      cloud.position.x += dt * 3.2;
+      if (cloud.position.x > 480) {
+        cloud.position.x = -480;
+      }
+    });
+
+    // Natural Sinusoidal Wind Sway on Trees and Palms
+    treesWithSway.forEach(tree => {
+      const swayZ = Math.sin(time * 2.0 + tree.position.x * 0.12 + tree.position.z * 0.08) * 0.045;
+      const swayX = Math.cos(time * 1.6 + tree.position.z * 0.12) * 0.03;
+      tree.rotation.z = swayZ;
+      tree.rotation.x = swayX;
+    });
+
+    // Weather Particles Simulation (Snowfall or Floating Lava Embers)
+    if (weatherParticles && weatherPositions && weatherParticleGeo) {
+      const count = weatherPositions.length / 3;
+      for (let p = 0; p < count; p++) {
+        if (theme === 'snow') {
+          weatherPositions[p * 3 + 1] -= dt * 11; // snow falls down
+          weatherPositions[p * 3] += Math.sin(time * 1.4 + p) * dt * 3.0; // gentle wind gust
+          if (weatherPositions[p * 3 + 1] < 0) {
+            weatherPositions[p * 3 + 1] = 58;
+            weatherPositions[p * 3] = (Math.random() - 0.5) * 500;
+            weatherPositions[p * 3 + 2] = (Math.random() - 0.5) * 500;
+          }
+        } else if (theme === 'volcano') {
+          weatherPositions[p * 3 + 1] += dt * 7.5; // fiery embers rise into sky
+          weatherPositions[p * 3] += Math.sin(time * 2.2 + p) * dt * 2.2;
+          if (weatherPositions[p * 3 + 1] > 58) {
+            weatherPositions[p * 3 + 1] = 0;
+            weatherPositions[p * 3] = (Math.random() - 0.5) * 500;
+            weatherPositions[p * 3 + 2] = (Math.random() - 0.5) * 500;
+          }
+        }
+      }
+      weatherParticleGeo.attributes.position.needsUpdate = true;
     }
 
     // Animate item boxes

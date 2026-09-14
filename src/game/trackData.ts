@@ -261,53 +261,35 @@ export const TRACK_BUNDLES: Record<TrackId, TrackDataBundle> = {
 };
 
 /**
- * Robust forward-biased waypoint locator that prevents back-tracking or crossing loops
+ * Exhaustive precision waypoint locator that guarantees the true closest waypoint
+ * across all 400 track waypoints without getting trapped or desynchronized.
  */
 export function getClosestWaypoint(
   waypoints: TrackWaypoint[],
   x: number,
   z: number,
-  lastKnownIndex: number = -1
+  _lastKnownIndex?: number
 ): { index: number; distSq: number; progress: number } {
   let bestIdx = 0;
   let minDistSq = Infinity;
+  const count = waypoints.length;
 
-  if (lastKnownIndex >= 0) {
-    // Forward-oriented search: check small step backward (-3) to forward (+25)
-    const windowStart = lastKnownIndex - 3;
-    const windowLength = 30;
+  for (let idx = 0; idx < count; idx++) {
+    const wp = waypoints[idx];
+    const dx = wp.x - x;
+    const dz = wp.z - z;
+    const distSq = dx * dx + dz * dz;
 
-    for (let i = 0; i < windowLength; i++) {
-      const idx = (windowStart + i + WAYPOINTS_COUNT * 2) % WAYPOINTS_COUNT;
-      const wp = waypoints[idx];
-      const dx = wp.x - x;
-      const dz = wp.z - z;
-      const distSq = dx * dx + dz * dz;
-
-      if (distSq < minDistSq) {
-        minDistSq = distSq;
-        bestIdx = idx;
-      }
-    }
-  } else {
-    // Uninitialized: full search
-    for (let idx = 0; idx < WAYPOINTS_COUNT; idx++) {
-      const wp = waypoints[idx];
-      const dx = wp.x - x;
-      const dz = wp.z - z;
-      const distSq = dx * dx + dz * dz;
-
-      if (distSq < minDistSq) {
-        minDistSq = distSq;
-        bestIdx = idx;
-      }
+    if (distSq < minDistSq) {
+      minDistSq = distSq;
+      bestIdx = idx;
     }
   }
 
   return {
     index: bestIdx,
     distSq: minDistSq,
-    progress: bestIdx / WAYPOINTS_COUNT,
+    progress: bestIdx / count,
   };
 }
 
